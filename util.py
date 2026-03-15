@@ -509,7 +509,11 @@ def write_csv(results: dict, output_path: str) -> None:
 # Phase 3 Helper — SciPy Interpolation for Missed Detections
 # ==============================================================================
 
-def interpolate_bounding_boxes(data: list[dict]) -> list[dict]:
+def interpolate_bounding_boxes(
+    data: list[dict],
+    smooth_car_bbox_window: int = 1,
+    min_track_frames: int = 0,
+) -> list[dict]:
     """
     Use SciPy 1D interpolation to fill in missing license plate bounding boxes
     across frames where the plate was not detected (e.g., due to motion blur,
@@ -531,10 +535,33 @@ def interpolate_bounding_boxes(data: list[dict]) -> list[dict]:
               license_plate_bbox, license_plate_bbox_score,
               license_number, license_number_score.
 
+    Args:
+        smooth_car_bbox_window: Centered moving-average window for car_bbox
+            coordinate smoothing. Set to 1 to disable.
+        min_track_frames: Drop tracks shorter than this number of frames after
+            interpolation/smoothing. Set to 0 to keep all tracks.
+
     Returns:
         List of dicts with interpolated rows added in-place, sorted by
         (frame_nmr, car_id).
     """
+    def parse_bbox(bbox_str):
+        """Parse bbox string with spaces/commas into [x1,y1,x2,y2] floats."""
+        nums = re.findall(r'[-+]?\d*\.?\d+', str(bbox_str))
+        return [float(n) for n in nums] if len(nums) == 4 else None
+
+    def smooth_centered(values: list[float], window: int) -> list[float]:
+        """Centered moving average with edge handling for short sequences."""
+        if window <= 1 or len(values) <= 1:
+            return values
+        half = window // 2
+        out = []
+        for i in range(len(values)):
+            lo = max(0, i - half)
+            hi = min(len(values), i + half + 1)
+            out.append(float(np.mean(values[lo:hi])))
+        return out
+
     # Group rows by car_id
     frame_numbers = np.array([int(row['frame_nmr']) for row in data])
     car_ids       = np.array([int(row['car_id'])    for row in data])
@@ -546,13 +573,6 @@ def interpolate_bounding_boxes(data: list[dict]) -> list[dict]:
         mask = car_ids == car_id
         car_rows = [data[i] for i in np.where(mask)[0]]
         car_frames = frame_numbers[mask]
-
-        # Parse bounding boxes — only rows with valid license plate data
-        def parse_bbox(bbox_str):
-            """Parse '[x1 y1 x2 y2]' string into a float list."""
-            # Handle both space-separated and comma-separated formats
-            nums = re.findall(r'[\d.]+', bbox_str)
-            return [float(n) for n in nums] if len(nums) == 4 else None
 
         # Identify "anchor" frames: frames where we have a valid plate bbox
         anchor_frames = []
@@ -587,9 +607,6 @@ def interpolate_bounding_boxes(data: list[dict]) -> list[dict]:
         best_idx  = int(np.argmax(anchor_scores))
         best_text = anchor_texts[best_idx]
         best_score = anchor_scores[best_idx]
-
-        # Generate interpolated rows for every frame from min to max anchor
-        all_frame_range = range(anchor_frames[0], anchor_frames[-1] + 1)
 
         # Build a quick lookup of original rows
         original_lookup = {int(r['frame_nmr']): r for r in car_rows}
@@ -629,6 +646,43 @@ def interpolate_bounding_boxes(data: list[dict]) -> list[dict]:
                         'license_number_score':     best_score,
                     }
                     interpolated.append(new_row)
+
+    # Optional car bbox smoothing and optional short-track filtering.
+    if interpolated and (smooth_car_bbox_window > 1 or min_track_frames > 0):
+        by_car = {}
+        for row in interpolated:
+            cid = int(row['car_id'])
+            by_car.setdefault(cid, []).append(row)
+
+        processed = []
+        for cid, rows in by_car.items():
+            rows.sort(key=lambda r: int(r['frame_nmr']))
+
+            if min_track_frames > 0 and len(rows) < min_track_frames:
+                continue
+
+            if smooth_car_bbox_window > 1:
+                coords = [parse_bbox(r.get('car_bbox', '')) for r in rows]
+                valid_idx = [i for i, c in enumerate(coords) if c is not None]
+                if valid_idx:
+                    x1 = [coords[i][0] for i in valid_idx]
+                    y1 = [coords[i][1] for i in valid_idx]
+                    x2 = [coords[i][2] for i in valid_idx]
+                    y2 = [coords[i][3] for i in valid_idx]
+
+                    sx1 = smooth_centered(x1, smooth_car_bbox_window)
+                    sy1 = smooth_centered(y1, smooth_car_bbox_window)
+                    sx2 = smooth_centered(x2, smooth_car_bbox_window)
+                    sy2 = smooth_centered(y2, smooth_car_bbox_window)
+
+                    for k, idx in enumerate(valid_idx):
+                        rows[idx]['car_bbox'] = '[{:.2f} {:.2f} {:.2f} {:.2f}]'.format(
+                            sx1[k], sy1[k], sx2[k], sy2[k]
+                        )
+
+            processed.extend(rows)
+
+        interpolated = processed
 
     # Sort combined results by (frame, car_id) for downstream processing
     interpolated.sort(key=lambda r: (int(r['frame_nmr']), int(r['car_id'])))

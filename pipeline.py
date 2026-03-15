@@ -81,6 +81,8 @@ PLATE_BLUR_VAR_THRESHOLD = 80.0  # Skip very blurry plate crops before OCR
 PLATE_HISTORY_WINDOW = 12
 OCR_MIN_FRAME_GAP = 2           # Run OCR for same track every N frames (temporal voting fills gaps)
 MAX_OCR_CALLS_PER_FRAME = 4     # Prevent OCR overload in dense traffic scenes
+CAR_BBOX_SMOOTH_WINDOW = 5      # Centered moving average window for car bbox smoothing
+MIN_TRACK_FRAMES_FOR_OUTPUT = 0 # Set >0 (e.g. 15) to drop short-lived ghost tracks
 
 # ---- SORT Tracker Hyperparameters ---
 SORT_MAX_AGE       = 30     # Frames to keep a track alive without a detection
@@ -754,7 +756,11 @@ class ANPRPipeline:
                 raw_rows.append(row)
 
         if raw_rows:
-            smoothed_rows = interpolate_bounding_boxes(raw_rows)
+            smoothed_rows = interpolate_bounding_boxes(
+                raw_rows,
+                smooth_car_bbox_window=CAR_BBOX_SMOOTH_WINDOW,
+                min_track_frames=MIN_TRACK_FRAMES_FOR_OUTPUT,
+            )
 
             # Write the final, smoothed CSV
             with open(csv_path, 'w', newline='') as f:

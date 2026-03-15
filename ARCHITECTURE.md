@@ -140,6 +140,13 @@ To prevent severe FPS collapse in dense traffic scenes, current implementation i
 
 These controls trade some per-frame OCR coverage for stable throughput and are compensated by temporal voting.
 
+Default values currently configured:
+
+- INFERENCE_IMG_SIZE = 1024
+- OCR_MIN_FRAME_GAP = 2
+- MAX_OCR_CALLS_PER_FRAME = 4
+- PLATE_BLUR_VAR_THRESHOLD = 80.0
+
 ## 6. Outputs and Post-Processing
 
 Generated outputs:
@@ -154,6 +161,8 @@ Interpolation in [util.py](util.py):
 - Fills missing plate boxes between anchor detections.
 - Applies max-gap limits to avoid unrealistic long-gap interpolation.
 - Keeps best-confidence text when synthesizing intermediate rows.
+- Optionally smooths `car_bbox` coordinates with centered moving average.
+- Optionally drops short-lived tracks (`min_track_frames`) to suppress ghost IDs.
 
 ## 7. Known Runtime Constraints
 

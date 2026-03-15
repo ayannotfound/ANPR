@@ -78,8 +78,17 @@ Important runtime knobs are defined near the top of [pipeline.py](pipeline.py):
    - PLATE_BLUR_VAR_THRESHOLD
    - OCR_MIN_FRAME_GAP
    - MAX_OCR_CALLS_PER_FRAME
+   - CAR_BBOX_SMOOTH_WINDOW
+   - MIN_TRACK_FRAMES_FOR_OUTPUT
 - Throughput/accuracy trade-off:
    - INFERENCE_IMG_SIZE
+
+Current defaults in code:
+- INFERENCE_IMG_SIZE = 1024
+- OCR_MIN_FRAME_GAP = 2
+- MAX_OCR_CALLS_PER_FRAME = 4
+- CAR_BBOX_SMOOTH_WINDOW = 5
+- MIN_TRACK_FRAMES_FOR_OUTPUT = 0
 
 ## Why FPS Drops (and How to Fix)
 
@@ -93,6 +102,33 @@ Practical tuning order:
 2. Increase OCR_MIN_FRAME_GAP (for example, 2 -> 3).
 3. Lower MAX_OCR_CALLS_PER_FRAME (for example, 4 -> 2).
 4. Slightly raise PLATE_CONF_THRESHOLD to skip weaker candidates.
+
+## Flicker Control (Boxes + Text)
+
+### 1) Box vibration smoothing
+
+The post-processing step now supports centered moving-average smoothing of
+`car_bbox` coordinates in the smoothed CSV path:
+
+- `CAR_BBOX_SMOOTH_WINDOW = 5` (default)
+
+This reduces jitter from detection/tracking micro-motions.
+
+### 2) Ghost-track suppression (optional)
+
+Short-lived IDs can be dropped at post-processing time:
+
+- `MIN_TRACK_FRAMES_FOR_OUTPUT = 0` (default: keep all)
+
+Set it to values like `10` to `15` if dense distant traffic creates many brief
+flicker IDs.
+
+### 3) Global-best text lock
+
+Final polished render already uses a global-best lock per `car_id`:
+
+- For each track, highest-confidence `license_number` is chosen once.
+- That same text is rendered for all frames of that track in `final_output.mp4`.
 
 ## OCR Backend Notes (Windows)
 
