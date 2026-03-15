@@ -6,6 +6,7 @@ The repository provides:
 - Inference pipeline with tracking, OCR stabilization, and CSV/video outputs.
 - Dataset builder that merges Hugging Face + Indian Roboflow YOLO datasets.
 - YOLO training script with automatic fine-tune resume from an existing checkpoint.
+- FastAPI dashboard backend with background job processing, live progress, and browser-safe video re-encoding.
 
 ## Features
 
@@ -47,6 +48,25 @@ python pipeline.py --source input.mp4 --output output.mp4 --csv results.csv
 ```bash
 python pipeline.py --source input.mp4 --final final_output.mp4
 ```
+
+4. Run web dashboard:
+
+```bash
+python main.py
+```
+
+Then open `http://localhost:8000`.
+
+## Colab Notebook
+
+For Google Colab execution, use [ANPR_Colab.ipynb](ANPR_Colab.ipynb). It includes:
+- venv creation and activation
+- dependency installation
+- dataset download
+- optional training (off by default)
+- app startup
+
+It also prompts for `ROBOFLOW_API_KEY` securely at runtime.
 
 ## Runtime Behavior
 
@@ -188,12 +208,19 @@ python train.py --weights runs/detect/license_plate_detector/weights/best.pt
 
 ## Project Files
 
-- [pipeline.py](pipeline.py): main inference pipeline
+- [pipeline.py](pipeline.py): thin CLI wrapper for modular pipeline package
+- [anpr/pipeline_core.py](anpr/pipeline_core.py): full ANPR inference pipeline implementation
+- [anpr/cli.py](anpr/cli.py): package CLI entrypoint
 - [util.py](util.py): OCR preprocessing, post-processing, helpers
 - [sort.py](sort.py): tracker implementation
 - [train.py](train.py): YOLO training/fine-tuning
 - [download_dataset.py](download_dataset.py): dataset download and merge
+- [main.py](main.py): thin entrypoint (creates FastAPI app + starts server)
+- [webapp/api.py](webapp/api.py): FastAPI route wiring
+- [webapp/jobs.py](webapp/jobs.py): async job lifecycle and pipeline subprocess streaming
+- [webapp/video_codec.py](webapp/video_codec.py): ffmpeg discovery + web-safe H.264 re-encode
+- [webapp/config.py](webapp/config.py): backend paths and shared headers/constants
 
 ## Architecture Reference
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed phase-by-phase internals and data flow.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed phase-by-phase internals and data flow.
