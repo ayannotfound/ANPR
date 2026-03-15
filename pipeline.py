@@ -430,7 +430,7 @@ class ANPRPipeline:
         frame_results: dict,
     ) -> np.ndarray:
         """
-        Draw bounding boxes, track IDs, and plate text annotations on the frame.
+        Draw bounding boxes and verified plate text annotations on the frame.
 
         Args:
             frame:            BGR video frame.
@@ -444,7 +444,7 @@ class ANPRPipeline:
         """
         annotated = frame.copy()
 
-        # --- Draw vehicle bounding boxes and SORT track IDs ---
+        # --- Draw vehicle bounding boxes ---
         for track in vehicle_tracks:
             x1, y1, x2, y2, car_id = [int(v) for v in track]
 
@@ -457,20 +457,12 @@ class ANPRPipeline:
                 line_length_x=20, line_length_y=20,
             )
 
-            # Track ID label above the bounding box
-            label_text  = f"CAR #{int(car_id)}"
-            (lw, lh), _ = cv2.getTextSize(label_text, FONT, FONT_SCALE, FONT_THICKNESS)
-            cv2.rectangle(annotated, (x1, y1 - lh - 8), (x1 + lw + 4, y1), VEHICLE_BOX_COLOR, -1)
-            cv2.putText(annotated, label_text, (x1 + 2, y1 - 4),
-                        FONT, FONT_SCALE, TEXT_COLOR, FONT_THICKNESS)
-
-            # --- Draw recognized plate text if available ---
+            # --- Draw recognized plate text only when verified valid ---
             car_data = frame_results.get(int(car_id), {})
             plate_info = car_data.get('license_plate', {})
             plate_text = plate_info.get('text', '')
-            if plate_text:
-                validity_marker = " ✓" if plate_info.get('is_valid') else ""
-                display = f"{plate_text}{validity_marker}"
+            if plate_text and plate_info.get('is_valid'):
+                display = plate_text
                 (tw, th), _ = cv2.getTextSize(display, FONT, FONT_SCALE + 0.1, FONT_THICKNESS)
                 # Draw a semi-transparent label background below the vehicle box
                 overlay = annotated.copy()
@@ -682,8 +674,9 @@ class ANPRPipeline:
                 best_text = self.best_plate_by_car.get(car_id, {}).get('text')
                 fallback_text = voted_text or best_text
                 if fallback_text and car_id not in frame_results:
+                    corrected_fb, is_valid_fb = post_process_plate(str(fallback_text))
                     frame_results[car_id] = {
-                        'license_plate': {'text': fallback_text, 'is_valid': True}
+                        'license_plate': {'text': corrected_fb, 'is_valid': is_valid_fb}
                     }
 
                 csv_writer.writerow([
@@ -811,20 +804,25 @@ def render_final_video(
     # Load the smoothed CSV data indexed by frame number
     df = pd.read_csv(csv_path)
 
-    # For each car_id, find its single best (highest-confidence) plate reading.
+    # For each car_id, find its single best (highest-confidence) VERIFIED plate reading.
     # This "best plate" will be displayed consistently across all frames.
     # Filter to rows with actual OCR data (anti-vanishing rows have empty scores).
     best_plates = {}
     for car_id, group in df.groupby('car_id'):
         scores = pd.to_numeric(group['license_number_score'], errors='coerce')
         valid_mask = scores.notna() & group['license_number'].notna() & (group['license_number'].astype(str).str.strip() != '')
-        scored = group[valid_mask]
+        scored = group[valid_mask].copy()
+        if not scored.empty:
+            scored['verified_plate'] = scored['license_number'].astype(str).map(
+                lambda t: post_process_plate(t)[0] if post_process_plate(t)[1] else ''
+            )
+            scored = scored[scored['verified_plate'].astype(str).str.strip() != '']
         if scored.empty:
             continue
         best_idx = pd.to_numeric(scored['license_number_score'], errors='coerce').idxmax()
         best_row = scored.loc[best_idx]
         best_plates[int(car_id)] = {
-            'text':  best_row['license_number'],
+            'text':  best_row['verified_plate'],
             'score': float(best_row['license_number_score']),
         }
 
@@ -874,9 +872,6 @@ def render_final_video(
                 x1, y1, x2, y2 = [int(v) for v in car_bbox]
                 draw_border(frame, (x1, y1), (x2, y2), color=VEHICLE_BOX_COLOR,
                             thickness=2, line_length_x=20, line_length_y=20)
-                car_label = f"CAR #{car_id}"
-                cv2.putText(frame, car_label, (x1, y1 - 8),
-                            FONT, FONT_SCALE, VEHICLE_BOX_COLOR, FONT_THICKNESS)
 
             if plate_bbox:
                 px1, py1, px2, py2 = [int(v) for v in plate_bbox]

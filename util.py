@@ -108,6 +108,14 @@ VALID_PLATE_PATTERNS = [
     re.compile(r'^\d{2}BH\d{4}[A-Z]{1,2}$')       
 ]
 
+# Valid two-letter Indian state / UT registration prefixes.
+VALID_STATE_CODES = {
+    'AN', 'AP', 'AR', 'AS', 'BR', 'CG', 'CH', 'DD', 'DL', 'DN', 'GA', 'GJ',
+    'HP', 'HR', 'JH', 'JK', 'KA', 'KL', 'LA', 'LD', 'MH', 'ML', 'MN', 'MP',
+    'MZ', 'NL', 'OD', 'PB', 'PY', 'RJ', 'SK', 'TN', 'TR', 'TS', 'UK', 'UP',
+    'WB',
+}
+
 # Indian plate positional templates: L=letter expected, D=digit expected
 # Used for character correction BEFORE regex validation.
 PLATE_TEMPLATES = [
@@ -193,8 +201,16 @@ def post_process_plate(text: str) -> tuple[str, bool]:
     # 3. Positional character correction using templates
     corrected = _apply_positional_correction(clean_text)
 
-    # 4. Force validation against strict formats
+    # 4. Validate strict format first.
     is_valid = any(pattern.match(corrected) for pattern in VALID_PLATE_PATTERNS)
+    if not is_valid:
+        return corrected, False
+
+    # 5. Enforce valid state/UT prefix for non-BH plates.
+    if 'BH' not in corrected[2:4]:
+        state_code = corrected[:2]
+        if state_code not in VALID_STATE_CODES:
+            return corrected, False
     
     return corrected, is_valid
 

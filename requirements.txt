@@ -49,6 +49,11 @@ huggingface_hub>=0.24.0
 datasets>=2.20.0
 roboflow>=1.1.42
 
+# --- Web API / Dashboard ---
+fastapi>=0.112.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+
 # --- Optional: SORT from pip (alternative to local sort.py) ---
 # If you prefer the pip package: pip install sort-tracker
 # We include a self-contained sort.py in this project instead.
