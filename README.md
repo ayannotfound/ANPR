@@ -1,226 +1,167 @@
 # ANPR: Automatic Number Plate Recognition Pipeline
 
-End-to-end ANPR for video footage using YOLOv8 + SORT + PaddleOCR, tuned for Indian plate formats and noisy real-world traffic scenes.
+End-to-end ANPR for video files using YOLOv8 + SORT + PaddleOCR, tuned for Indian license plate formats.
 
-The repository provides:
-- Inference pipeline with tracking, OCR stabilization, and CSV/video outputs.
-- Dataset builder that merges Hugging Face + Indian Roboflow YOLO datasets.
-- YOLO training script with automatic fine-tune resume from an existing checkpoint.
-- FastAPI dashboard backend with background job processing, live progress, and browser-safe video re-encoding.
+This repository includes:
+- Inference pipeline with tracking, OCR stabilization, CSV outputs, and annotated video generation.
+- Dataset builder that merges Hugging Face and Roboflow Indian YOLO datasets.
+- YOLO training/fine-tuning script for the plate detector.
+- FastAPI web app with background jobs and browser-safe video re-encoding.
+- Google Colab notebook for GPU-based dataset/training workflows.
+- Local setup bootstrap script for one-command environment creation.
 
-## Features
+## 1) Local Setup (Recommended First Step)
 
-- Two-stage detection:
-   - Vehicle detector on full frame.
-   - Plate detector inside each tracked vehicle ROI.
-- OCR robustness for Indian plates:
-   - IND-strip noise cleanup.
-   - Positional character correction templates.
-   - Strict Indian regex validation.
-   - Multi-variant OCR preprocessing (base + adaptive threshold variants).
-- Temporal stabilization:
-   - Confidence-weighted voting per track.
-   - Best-read fallback memory per track.
-- Throughput controls:
-   - OCR frame-gap throttling per track.
-   - Per-frame OCR budget cap.
-   - Blur-gating before OCR.
-- Output stabilization:
-   - Raw CSV (frame-by-frame) + smoothed CSV via interpolation.
-   - Optional final re-rendered polished video.
-
-## Quick Start
-
-1. Install dependencies:
+Run the bootstrap script:
 
 ```bash
-pip install -r requirements.txt
+python setup_local.py
 ```
 
-2. Run pipeline:
+What it does:
+- Creates `venv` (or reuses it if present).
+- Upgrades `pip`, `setuptools`, `wheel`.
+- Installs `requirements.txt`.
+- Runs a smoke import check for core modules.
+
+Optional flags:
 
 ```bash
-python pipeline.py --source input.mp4 --output output.mp4 --csv results.csv
+python setup_local.py --venv-dir .venv
+python setup_local.py --python C:/Path/To/python.exe
 ```
 
-3. Optional polished output pass:
+After setup, activate your virtual environment:
 
-```bash
-python pipeline.py --source input.mp4 --final final_output.mp4
-```
+- Windows PowerShell: `venv\Scripts\Activate.ps1`
+- Linux/macOS: `source venv/bin/activate`
 
-4. Run web dashboard:
+## 2) Local File-Based Workflow (Dataset -> Train -> Run)
 
-```bash
-python main.py
-```
+### 2.1 Build dataset
 
-Then open `http://localhost:8000`.
-
-## Colab Notebook
-
-For Google Colab execution, use [ANPR_Colab.ipynb](ANPR_Colab.ipynb). It includes:
-- venv creation and activation
-- dependency installation
-- dataset download
-- optional training (off by default)
-- app startup
-
-It also prompts for `ROBOFLOW_API_KEY` securely at runtime.
-
-## Runtime Behavior
-
-- Default console mode prints progress every N frames.
-- Use verbose mode for extra debug lines:
-
-```bash
-python pipeline.py --source input.mp4 --verbose
-```
-
-### CLI Arguments
-
-- --source: input video path (default: input.mp4)
-- --output: first-pass annotated video (default: output.mp4)
-- --csv: smoothed CSV path (raw CSV is auto-written as *_raw.csv)
-- --final: optional polished output video path (default: final_output.mp4)
-- --skip-final-render: skip second-pass polished render
-- --verbose: enable additional debug messages
-
-## Configuration Knobs (pipeline.py)
-
-Important runtime knobs are defined near the top of [pipeline.py](pipeline.py):
-
-- Detection:
-   - VEHICLE_CONF_THRESHOLD
-   - PLATE_CONF_THRESHOLD
-   - OCR_CONF_THRESHOLD
-- OCR quality/speed:
-   - PLATE_BLUR_VAR_THRESHOLD
-   - OCR_MIN_FRAME_GAP
-   - MAX_OCR_CALLS_PER_FRAME
-   - CAR_BBOX_SMOOTH_WINDOW
-   - MIN_TRACK_FRAMES_FOR_OUTPUT
-- Throughput/accuracy trade-off:
-   - INFERENCE_IMG_SIZE
-
-Current defaults in code:
-- INFERENCE_IMG_SIZE = 1024
-- OCR_MIN_FRAME_GAP = 2
-- MAX_OCR_CALLS_PER_FRAME = 4
-- CAR_BBOX_SMOOTH_WINDOW = 5
-- MIN_TRACK_FRAMES_FOR_OUTPUT = 0
-
-## Why FPS Drops (and How to Fix)
-
-FPS can plummet when scene density rises because compute scales with:
-- Number of tracked vehicles (more plate ROI detections).
-- Number of OCR calls (and each call runs multiple preprocessing variants).
-- OCR backend running on CPU.
-
-Practical tuning order:
-1. Lower INFERENCE_IMG_SIZE (for example, 1024 -> 640 -> 512).
-2. Increase OCR_MIN_FRAME_GAP (for example, 2 -> 3).
-3. Lower MAX_OCR_CALLS_PER_FRAME (for example, 4 -> 2).
-4. Slightly raise PLATE_CONF_THRESHOLD to skip weaker candidates.
-
-## Flicker Control (Boxes + Text)
-
-### 1) Box vibration smoothing
-
-The post-processing step now supports centered moving-average smoothing of
-`car_bbox` coordinates in the smoothed CSV path:
-
-- `CAR_BBOX_SMOOTH_WINDOW = 5` (default)
-
-This reduces jitter from detection/tracking micro-motions.
-
-### 2) Ghost-track suppression (optional)
-
-Short-lived IDs can be dropped at post-processing time:
-
-- `MIN_TRACK_FRAMES_FOR_OUTPUT = 0` (default: keep all)
-
-Set it to values like `10` to `15` if dense distant traffic creates many brief
-flicker IDs.
-
-### 3) Global-best text lock
-
-Final polished render already uses a global-best lock per `car_id`:
-
-- For each track, highest-confidence `license_number` is chosen once.
-- That same text is rendered for all frames of that track in `final_output.mp4`.
-
-## OCR Backend Notes (Windows)
-
-- The pipeline attempts GPU Paddle initialization first, then falls back.
-- In mixed Torch + Paddle GPU setups on Windows, runtime conflicts can occur depending on CUDA/cuDNN/DLL combinations.
-- If OCR GPU is unstable in your environment, CPU OCR remains the reliable fallback.
-
-## Dataset Builder (Merged Sources)
-
-Use [download_dataset.py](download_dataset.py) to build a single YOLO dataset:
+Default (HF + Roboflow if key exists):
 
 ```bash
 python download_dataset.py
 ```
 
-To include Roboflow Indian dataset:
+If `ROBOFLOW_API_KEY` is not set, local interactive runs will prompt for it.
+Leave it blank to continue with Hugging Face source only.
+
+With explicit Roboflow key:
 
 ```bash
-set ROBOFLOW_API_KEY=your_key_here
+# PowerShell
+$env:ROBOFLOW_API_KEY="your_key_here"
 python download_dataset.py --roboflow-version 1
 ```
 
-Output:
-- data/license_plates/images/train|val|test
-- data/license_plates/labels/train|val|test
-- data/license_plates/data.yaml
-
 Useful flags:
-- --no-hf
-- --no-roboflow
-- --keep-temp
+- `--no-hf`
+- `--no-roboflow`
+- `--keep-temp`
 
-## Training
+Output dataset:
+- `data/license_plates/images/train|val|test`
+- `data/license_plates/labels/train|val|test`
+- `data/license_plates/data.yaml`
 
-Run training via [train.py](train.py):
+### 2.2 Train plate detector
 
 ```bash
 python train.py
 ```
 
 Fine-tune behavior:
-- If runs/detect/license_plate_detector/weights/best.pt exists, training auto-starts from it.
-- Otherwise it starts from yolov8n.pt.
+- If `runs/detect/license_plate_detector/weights/best.pt` exists, training resumes from it.
+- Otherwise training starts from `yolov8n.pt`.
 
-Override checkpoint explicitly:
+Override start weights:
 
 ```bash
 python train.py --weights runs/detect/license_plate_detector/weights/best.pt
 ```
 
-## Outputs
+### 2.3 Run inference pipeline
 
-- output.mp4: first-pass annotated video
-- results_raw.csv: raw per-frame tracking/OCR rows
-- results.csv: interpolated/smoothed CSV
-- final_output.mp4: optional polished render from smoothed CSV
+```bash
+python pipeline.py --source input.mp4 --output output.mp4 --csv results.csv
+```
 
-## Project Files
+Useful runtime options:
 
-- [pipeline.py](pipeline.py): thin CLI wrapper for modular pipeline package
-- [anpr/pipeline_core.py](anpr/pipeline_core.py): full ANPR inference pipeline implementation
-- [anpr/cli.py](anpr/cli.py): package CLI entrypoint
-- [util.py](util.py): OCR preprocessing, post-processing, helpers
-- [sort.py](sort.py): tracker implementation
-- [train.py](train.py): YOLO training/fine-tuning
+```bash
+python pipeline.py --source input.mp4 --verbose
+python pipeline.py --source input.mp4 --skip-final-render
+```
+
+### 2.4 Run local web app
+
+```bash
+python main.py
+```
+
+Open: `http://localhost:8000`
+
+## 3) Colab GPU Workflow
+
+Use notebook: [ANPR_Colab.ipynb](ANPR_Colab.ipynb)
+
+Notebook cell order:
+1. Cell 1: Overview.
+2. Cell 2: Repo detection/clone + dependency install.
+3. Cell 3: Roboflow key instructions.
+4. Cell 4: Prompt for `ROBOFLOW_API_KEY` (optional).
+5. Cell 5: Dataset build from notebook.
+6. Cell 6: Training notes.
+7. Cell 7: Optional training (`TRAIN_IF_NEEDED = False` by default).
+8. Cell 8: Export artifacts zip for local laptop use.
+
+Recommended split:
+- Colab GPU: dataset building + optional training.
+- Local machine: inference + web app execution.
+
+After artifact export from Colab:
+1. Download zip from Colab.
+2. Copy trained weights to `runs/detect/license_plate_detector/weights/best.pt` locally.
+3. Run local app with `python main.py`.
+
+## 4) Key Runtime Controls
+
+Primary tuning constants are in [anpr/pipeline_core.py](anpr/pipeline_core.py):
+- Detection thresholds: `VEHICLE_CONF_THRESHOLD`, `PLATE_CONF_THRESHOLD`, `OCR_CONF_THRESHOLD`
+- OCR speed/quality: `PLATE_BLUR_VAR_THRESHOLD`, `OCR_MIN_FRAME_GAP`, `MAX_OCR_CALLS_PER_FRAME`
+- Stabilization: `CAR_BBOX_SMOOTH_WINDOW`, `MIN_TRACK_FRAMES_FOR_OUTPUT`
+- Throughput: `INFERENCE_IMG_SIZE`
+
+## 5) Outputs
+
+- `output.mp4`: first-pass annotated video
+- `results_raw.csv`: per-frame raw OCR/tracking rows
+- `results.csv`: smoothed/interpolated rows
+- `final_output.mp4`: optional polished render
+
+## 6) Troubleshooting Notes
+
+- If FPS drops, lower `INFERENCE_IMG_SIZE` and/or reduce OCR frequency with `OCR_MIN_FRAME_GAP`.
+- If OCR is unstable on Windows GPU, CPU fallback is typically more reliable for PaddleOCR.
+- If browser playback fails in web UI, ensure `ffmpeg` is available. The app also attempts `imageio-ffmpeg` fallback.
+
+## 7) Project Map
+
+- [setup_local.py](setup_local.py): local bootstrap (venv + install + smoke check)
 - [download_dataset.py](download_dataset.py): dataset download and merge
-- [main.py](main.py): thin entrypoint (creates FastAPI app + starts server)
-- [webapp/api.py](webapp/api.py): FastAPI route wiring
-- [webapp/jobs.py](webapp/jobs.py): async job lifecycle and pipeline subprocess streaming
-- [webapp/video_codec.py](webapp/video_codec.py): ffmpeg discovery + web-safe H.264 re-encode
-- [webapp/config.py](webapp/config.py): backend paths and shared headers/constants
+- [train.py](train.py): YOLO plate detector training/fine-tuning
+- [pipeline.py](pipeline.py): root CLI entrypoint
+- [anpr/pipeline_core.py](anpr/pipeline_core.py): core ANPR runtime
+- [main.py](main.py): web app server entrypoint
+- [webapp/api.py](webapp/api.py): API routes
+- [webapp/jobs.py](webapp/jobs.py): job lifecycle/progress/log streaming
+- [webapp/video_codec.py](webapp/video_codec.py): web-safe H.264 conversion helper
+- [util.py](util.py): OCR preprocessing and result post-processing helpers
+- [sort.py](sort.py): tracker implementation
 
-## Architecture Reference
+## 8) Architecture Docs
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed phase-by-phase internals and data flow.
+- Detailed technical internals: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)

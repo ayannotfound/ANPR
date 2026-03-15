@@ -20,6 +20,7 @@ import shutil
 import zipfile
 import warnings
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List
 
@@ -156,10 +157,33 @@ def _download_hf(out_dir: Path) -> Path | None:
 
         if zip_path is not None:
             _extract_zip_to_dir(zip_path, out_dir)
-            return _find_dataset_root(out_dir)
+            root = _find_dataset_root(out_dir)
+            pairs = _collect_pairs_from_source(root)
+            if sum(len(v) for v in pairs.values()) > 0:
+                return root
 
     except Exception as ex:
         _log(f"[HF  ] Hub zip path failed: {ex}")
+
+    # Some dataset repos no longer load via `datasets.load_dataset` because they rely
+    # on deprecated script-style builders. Fallback to direct repo snapshot download.
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id=HF_REPO_ID,
+            repo_type="dataset",
+            local_dir=str(out_dir),
+            local_dir_use_symlinks=False,
+        )
+        root = _find_dataset_root(out_dir)
+        pairs = _collect_pairs_from_source(root)
+        if sum(len(v) for v in pairs.values()) > 0:
+            _log("[HF  ] Snapshot fallback succeeded.")
+            return root
+        _log("[HF  ] Snapshot downloaded but no YOLO image/label pairs were found.")
+    except Exception as ex:
+        _log(f"[HF  ] Snapshot fallback failed: {ex}")
 
     try:
         from datasets import load_dataset
@@ -392,6 +416,30 @@ def main() -> None:
     import os
 
     api_key = args.roboflow_api_key or os.getenv("ROBOFLOW_API_KEY")
+
+    if include_roboflow and not api_key:
+        if sys.stdin and sys.stdin.isatty():
+            try:
+                from getpass import getpass
+
+                entered = getpass(
+                    "Enter ROBOFLOW_API_KEY (leave blank to skip Roboflow source): "
+                ).strip()
+            except Exception:
+                entered = input(
+                    "Enter ROBOFLOW_API_KEY (leave blank to skip Roboflow source): "
+                ).strip()
+
+            if entered:
+                api_key = entered
+                os.environ["ROBOFLOW_API_KEY"] = entered
+            else:
+                _log("[RF  ] No key entered. Roboflow source will be skipped.")
+        else:
+            _log(
+                "[RF  ] No API key provided and shell is non-interactive. "
+                "Set ROBOFLOW_API_KEY or pass --roboflow-api-key to enable Roboflow source."
+            )
 
     _log("=" * 72)
     _log("ANPR Dataset Builder")
